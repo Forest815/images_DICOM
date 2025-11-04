@@ -245,8 +245,8 @@ def run_gui_sg(initial_folder: Optional[str] = None):
         [sg.Button('Open Folder'), sg.Input(initial_folder or '', key='-FOLDER-', enable_events=True, size=(40,1)), sg.Button('Reload')],
         [sg.Text('View'), sg.Combo(['Axial','Coronal','Sagittal','Multi'], default_value='Axial', key='-VIEW-', enable_events=True)],
         [sg.Text('Slice:'), sg.Slider(range=(0,1), orientation='h', size=(60,15), key='-SLICE-', enable_events=True)],
-    [sg.Text('Window Width'), sg.Slider(range=( -2000, 2000), orientation='h', size=(40,12), key='-UI_WWIDTH-', enable_events=True)],
-    [sg.Text('Window Level'), sg.Slider(range=(1, 4000), orientation='h', size=(40,12), key='-UI_WLEVEL-', enable_events=True)],
+    [sg.Text('Window Width'), sg.Slider(range=(1, 4000), orientation='h', size=(40,12), key='-UI_WWIDTH-', enable_events=True)],
+    [sg.Text('Window Level'), sg.Slider(range=(-2000, 2000), orientation='h', size=(40,12), key='-UI_WLEVEL-', enable_events=True)],
         [sg.Button('Prev'), sg.Button('Next'), sg.Button('Save Slice'), sg.Button('Quit')]
     ]
 
@@ -276,17 +276,17 @@ def run_gui_sg(initial_folder: Optional[str] = None):
             pid = meta.get('patient_id') or 'Unknown'
             window['-PATIENT-'].update(f"Patient: {pname}    ID: {pid}")
             window['-SLICE-'].update(range=(0, max(0, volume.shape[0]-1)), value=0)
-            wc = int(meta.get('window_center', 0))
-            ww = int(max(1, meta.get('window_width', 1)))
-            window['-UI_WWIDTH-'].update(range=(-2000,2000), value=wc)
-            window['-UI_WLEVEL-'].update(range=(1,4000), value=ww)
-            # initial image
+            wc = int(meta.get('window_center', 30))
+            ww = int(max(1, meta.get('window_width', 400)))
+            # UI_WWIDTH is Window Width (width), UI_WLEVEL is Window Level (center)
+            window['-UI_WWIDTH-'].update(range=(1,4000), value=ww)
+            window['-UI_WLEVEL-'].update(range=(-2000,2000), value=wc)
+            # initial image: render all panes using the same render path
             def _init_update():
                 nonlocal current_slice
                 if volume is None:
                     return
-                img8 = apply_window_level(volume[current_slice], wc, ww)
-                window['-IMAGE-'].update(data=pil_image_bytes_from_array(img8))
+                render_panes()
             _init_update()
         except Exception as e:
             sg.popup_error('Failed to load initial DICOM folder', e)
@@ -306,8 +306,10 @@ def run_gui_sg(initial_folder: Optional[str] = None):
         if sag_idx is None:
             sag_idx = int(np.clip(W//2, 0, W-1))
 
-        center = float(window['-UI_WWIDTH-'].get()) if window['-UI_WWIDTH-'].get() is not None else meta.get('window_center', 0)
-        width = float(window['-UI_WLEVEL-'].get()) if window['-UI_WLEVEL-'].get() is not None else meta.get('window_width', 1)
+        # Map UI controls to apply_window_level(center, width)
+        # UI_WLEVEL -> center, UI_WWIDTH -> width
+        center = float(window['-UI_WLEVEL-'].get()) if window['-UI_WLEVEL-'].get() is not None else meta.get('window_center', 0)
+        width = float(window['-UI_WWIDTH-'].get()) if window['-UI_WWIDTH-'].get() is not None else meta.get('window_width', 1)
 
         axial = apply_window_level(get_oriented_slice(volume, 'Axial', ax_idx), center, width)
         coronal = apply_window_level(get_oriented_slice(volume, 'Coronal', cor_idx), center, width)
@@ -349,11 +351,11 @@ def run_gui_sg(initial_folder: Optional[str] = None):
                     pid = meta.get('patient_id') or 'Unknown'
                     window['-PATIENT-'].update(f"Patient: {pname}    ID: {pid}")
                     # set WL sliders initial
-                    wc = int(meta.get('window_center', 0))
-                    ww = int(max(1, meta.get('window_width', 1)))
-                    # clamp to slider ranges
-                    window['-UI_WWIDTH-'].update(range=(-2000,2000), value=wc)
-                    window['-UI_WLEVEL-'].update(range=(1,4000), value=ww)
+                    wc = int(meta.get('window_center', 30))
+                    ww = int(max(1, meta.get('window_width', 400)))
+                    # clamp to slider ranges (UI_WWIDTH is width, UI_WLEVEL is center)
+                    window['-UI_WWIDTH-'].update(range=(1,4000), value=ww)
+                    window['-UI_WLEVEL-'].update(range=(-2000,2000), value=wc)
                     render_panes()
                 except Exception as e:
                     sg.popup_error('Failed to load DICOM series', e)
@@ -378,10 +380,11 @@ def run_gui_sg(initial_folder: Optional[str] = None):
                     volume, meta = load_dicom_series(folder)
                     current_slice = 0
                     window['-SLICE-'].update(range=(0, max(0, volume.shape[0]-1)), value=0)
-                    wc = int(meta.get('window_center', 0))
-                    ww = int(max(1, meta.get('window_width', 1)))
-                    window['-UI_WWIDTH-'].update(value=wc)
-                    window['-UI_WLEVEL-'].update(value=ww)
+                    wc = int(meta.get('window_center', 30))
+                    ww = int(max(1, meta.get('window_width', 400)))
+                    # ensure we update the correct sliders: UI_WWIDTH -> width, UI_WLEVEL -> center
+                    window['-UI_WWIDTH-'].update(value=ww)
+                    window['-UI_WLEVEL-'].update(value=wc)
                     # update patient label
                     pname = meta.get('patient_name', '')
                     pid = meta.get('patient_id', '')
@@ -432,7 +435,8 @@ def run_gui_sg(initial_folder: Optional[str] = None):
             if fname:
                 view_val = window['-VIEW-'].get() if window['-VIEW-'].get() is not None else 'Axial'
                 slice_img = get_oriented_slice(volume, view_val, current_slice)
-                img8 = apply_window_level(slice_img, float(window['-UI_WWIDTH-'].get()), float(window['-UI_WLEVEL-'].get()))
+                # use same mapping as render_panes: center = UI_WLEVEL, width = UI_WWIDTH
+                img8 = apply_window_level(slice_img, float(window['-UI_WLEVEL-'].get()), float(window['-UI_WWIDTH-'].get()))
                 # normalize before saving
                 target_shape = (volume.shape[1], volume.shape[2])
                 outimg = normalize_display_image(img8, target_shape, view_val)
@@ -487,6 +491,30 @@ def run_gui_tkinter(initial_folder: Optional[str] = None):
     tk.Label(ctrl, text='Orthogonal View').pack()
     tk.OptionMenu(ctrl, view_var, 'Sagittal', 'Coronal').pack(fill=tk.X)
 
+    # When the orthogonal view changes, immediately update ortho slider range and refresh display
+    def on_view_change(*args):
+        # if no volume loaded yet, nothing to do
+        if volume is None:
+            return
+        v = view_var.get()
+        # sagittal -> ortho slider indexes X (width)
+        if v == 'Sagittal':
+            ortho_slider.config(to=max(0, volume.shape[2]-1))
+            ortho_idx.set(volume.shape[2]//2)
+        else:
+            ortho_slider.config(to=max(0, volume.shape[1]-1))
+            ortho_idx.set(volume.shape[1]//2)
+        update_display()
+
+    try:
+        view_var.trace('w', on_view_change)
+    except Exception:
+        # older/newer tkinter versions may use trace_add
+        try:
+            view_var.trace_add('write', on_view_change)  # type: ignore
+        except Exception:
+            pass
+
     tk.Label(ctrl, text='Axial slice').pack()
     axial_slider = tk.Scale(ctrl, from_=0, to=0, orient=tk.HORIZONTAL, variable=axial_idx, command=lambda v: update_display())
     axial_slider.pack(fill=tk.X)
@@ -500,10 +528,12 @@ def run_gui_tkinter(initial_folder: Optional[str] = None):
     ortho_label.pack()
 
     tk.Label(ctrl, text='Window Width').pack()
-    wc_slider = tk.Scale(ctrl, from_=-2000, to=2000, orient=tk.HORIZONTAL, variable=ui_window_width_var, command=lambda v: update_display())
+    # Make top slider follow UI label: Window Width (width)
+    wc_slider = tk.Scale(ctrl, from_=1, to=4000, orient=tk.HORIZONTAL, variable=ui_window_width_var, command=lambda v: update_display())
     wc_slider.pack(fill=tk.X)
     tk.Label(ctrl, text='Window Level').pack()
-    ww_slider = tk.Scale(ctrl, from_=1, to=4000, orient=tk.HORIZONTAL, variable=ui_window_level_var, command=lambda v: update_display())
+    # Make bottom slider follow UI label: Window Level (center)
+    ww_slider = tk.Scale(ctrl, from_=-2000, to=2000, orient=tk.HORIZONTAL, variable=ui_window_level_var, command=lambda v: update_display())
     ww_slider.pack(fill=tk.X)
 
     def on_save():
@@ -514,7 +544,10 @@ def run_gui_tkinter(initial_folder: Optional[str] = None):
             # save current axial with overlay
             z = axial_idx.get()
             # map UI sliders to apply_window_level(center, width)
-            img8 = apply_window_level(volume[z], ui_window_width_var.get(), ui_window_level_var.get())
+            # UI: top = width, bottom = center -> center = ui_window_level_var, width = ui_window_width_var
+            center = ui_window_level_var.get()
+            width = ui_window_width_var.get()
+            img8 = apply_window_level(volume[z], center, width)
             out = normalize_display_image(img8, (volume.shape[1], volume.shape[2]), 'Axial')
             pil = Image.fromarray(out)
             pil.save(fname)
@@ -547,10 +580,10 @@ def run_gui_tkinter(initial_folder: Optional[str] = None):
             ortho_slider.config(to=H-1)
         axial_idx.set(Z//2)
         ortho_idx.set((W//2) if view_var.get()=='Sagittal' else (H//2))
-        # Map meta to UI-labeled sliders: meta.window_center -> UI 'Window Width' slider value
-        wc_slider.set(int(meta.get('window_center', 0)))
-        # meta.window_width -> UI 'Window Level' slider value
-        ww_slider.set(int(max(1, meta.get('window_width', 1))))
+        # Map meta to UI-labeled sliders: meta.window_width -> UI 'Window Width' slider value
+        wc_slider.set(int(max(1, meta.get('window_width', 400))))
+        # meta.window_center -> UI 'Window Level' slider value
+        ww_slider.set(int(meta.get('window_center', 30)))
         patient_lbl.config(text=f"Patient: {meta.get('patient_name','Unknown')}   ID: {meta.get('patient_id','Unknown')}")
         update_display()
 
@@ -562,11 +595,11 @@ def run_gui_tkinter(initial_folder: Optional[str] = None):
         o = int(ortho_idx.get())
         axial_label.config(text=f'Axial: {z}')
         ortho_label.config(text=f'Ortho: {o}')
+
         # Read UI-labeled sliders and map to apply_window_level(center, width)
-        # UI 'Window Width' slider holds Window Center (center)
-        wc = int(ui_window_width_var.get())
-        # UI 'Window Level' slider holds Window Width (width)
-        ww = int(ui_window_level_var.get())
+        # UI: top = Window Width (width), bottom = Window Level (center)
+        width = int(ui_window_width_var.get())
+        center = int(ui_window_level_var.get())
 
         ax = volume[z]
         # get orth slice
@@ -576,8 +609,8 @@ def run_gui_tkinter(initial_folder: Optional[str] = None):
         else:
             ortho = get_oriented_slice(volume, 'Coronal', o)
 
-        ax8 = apply_window_level(ax, wc, ww)
-        ort8 = apply_window_level(ortho, wc, ww)
+        ax8 = apply_window_level(ax, center, width)
+        ort8 = apply_window_level(ortho, center, width)
 
         target = (H, W)
         ax_disp = normalize_display_image(ax8, target, 'Axial')
